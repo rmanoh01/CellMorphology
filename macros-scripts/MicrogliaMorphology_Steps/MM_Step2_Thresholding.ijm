@@ -1,7 +1,7 @@
 //// Microglia Morphology ImageJ macro
 //// STEP 2: Threshold images
 //// Created by Jenn Kim on September 18, 2022
-//// Updated July 29, 2024
+//// Updated by Rohin Manohar on October 27, 2025
 
 // FUNCTIONS
 
@@ -46,6 +46,7 @@ function thresholding(input, output, filename) {
 		saveAs("Tiff", output + filename + "_thresholded");
 		
 		close();
+		
 	}
 	
 // Auto local thresholding 
@@ -89,6 +90,7 @@ function thresholding2(input, output, filename) {
 		saveAs("Tiff", output + filename + "_thresholded");
 		
 		close();
+		
 	}
 
 // choices in drop-down prompts for MicrogliaMorphology macro
@@ -169,3 +171,11 @@ thresholding_parameters2 = newArray("Bernsen","Contrast","Mean","Median","MidGre
 	   	run("Close");
 		
 		print("Thresholding finished");
+		if (isOpen("Results")) {
+		    selectWindow("Results");
+		    run("Close");
+
+// Progress message
+		Dialog.create("MicrogliaMorphology");
+		Dialog.addMessage("We are done thresholding");
+		Dialog.show();
