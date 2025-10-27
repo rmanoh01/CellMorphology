@@ -1,6 +1,6 @@
 //// Microglia Morphology ImageJ macro
 //// Created by Jenn Kim on September 18, 2022
-//// Updated July 24, 2024
+//// Updated by Rohin Manohar on October 27, 2025
 
 // FUNCTIONS
 
@@ -45,6 +45,7 @@ function thresholding(input, output, filename) {
 		saveAs("Tiff", output + filename + "_thresholded");
 		
 		close();
+		
 	}
 	
 // Auto local thresholding 
@@ -88,15 +89,17 @@ function thresholding2(input, output, filename) {
 		saveAs("Tiff", output + filename + "_thresholded");
 		
 		close();
+		
 	}
 
 //Generating Single Cell ROIs from thresholded images
-function cellROI(input, output, filename, min, max){
+function cellROI(input, output, ROI_zip_output, filename, min, max){
 		print(input + filename);
     	open(input + filename);
     	
     	mainTitle=getTitle();
 		dirCropOutput=output;
+		dirROIZipOutput=ROI_zip_output;
 		
 	    run("ROI Manager...");
 	    roiManager("Show All");
@@ -106,6 +109,9 @@ function cellROI(input, output, filename, min, max){
 		run("Analyze Particles...", "pixel add");
 		roiManager("Show All");
 		roiManager("Measure");	
+		
+		filename = replace(mainTitle, ".tif", ".zip");
+        roiManager("Save", dirROIZipOutput + File.separator + filename);
 				
 		for (i = 0; i < nResults(); i++) {
 		//for (i = 0; i < 5; i++) {
@@ -186,7 +192,6 @@ thresholding_parameters2 = newArray("Bernsen","Contrast","Mean","Median","MidGre
 		Dialog.addChoice("Which method is best for your dataset?", thresholding_parameters2);
 		Dialog.addNumber("Radius:", 100);
 		Dialog.addCheckbox("Does your test image have ROIs traced?", true);
-		Dialog.addCheckbox("Do you want to use batchmode", false);
 		Dialog.addMessage("Next, let's determine the area range of a single microglial cell using a test image.");
 		Dialog.show();	
 		
@@ -195,7 +200,6 @@ thresholding_parameters2 = newArray("Bernsen","Contrast","Mean","Median","MidGre
 		autolocal_method= Dialog.getChoice();
 		autolocal_radius = Dialog.getNumber();
 		roichoicetest=Dialog.getCheckbox();
-		use_batchmode = Dialog.getCheckbox();
 
 
 // STEP 1b. Determining single cell area range using test image
@@ -283,20 +287,34 @@ thresholding_parameters2 = newArray("Bernsen","Contrast","Mean","Median","MidGre
 		
 		selectWindow("Results");
 		run("Close");
-		waitForUser("Select a particle that you would consider TOO BIG to be a single microglia cell and click letter m on your keyboard to measure its area. Do this a total of 5 times. Don't click OK until you're done with this!");
-		run("Summarize");
-		//number_rows = nResults;
-		area_max = getResult("Area", nResults-2);
 		
-		// close everything before starting with rest of macro
-		selectWindow("Results");
-		run("Close");
-		selectImage(nImages());
-		run("Close");
-		selectWindow("ROI Manager");
-	    run("Close");
-	    selectWindow("B&C");
-	    run("Close");
+		// --- MODIFIED SECTION START ---
+		waitForUser("Select a particle that you would consider TOO BIG to be a single microglia cell and click letter m on your keyboard to measure its area. Do this a total of 5 times. \n\nIF YOU WANT TO MANUALLY ENTER AN UPPER LIMIT OR USE A DEFAULT, CLICK OK WITHOUT MEASURING ANYTHING.");
+		
+		// Check if any measurements were made for the upper limit
+		if (nResults() > 0) {
+		    // If yes, calculate area_max from the measurements
+		    run("Summarize");
+		    area_max = getResult("Area", nResults-2);
+		    print("User-defined upper area limit set to: " + area_max);
+		} else {
+		    // If no measurements were made, ask user to manually enter or use default
+		    Dialog.create("Upper Area Limit");
+		    Dialog.addMessage("You did not measure any particles for the upper area limit.");
+		    Dialog.addMessage("Please choose how to set the upper area limit:");
+		    Dialog.addNumber("Enter upper area limit (or leave as 2500 for default):", 2500);
+		    Dialog.show();
+		    
+		    area_max = Dialog.getNumber();
+		    print("Upper area limit set to: " + area_max);
+		}
+		
+		// Safely close the Results table only if it exists
+		if (isOpen("Results")) {
+		    selectWindow("Results");
+		    run("Close");
+		}
+		// --- MODIFIED SECTION END ---
 	    
 	    // conditional printing for saving final parameters
 		if(auto_or_autolocal == "Auto thresholding"){
@@ -372,36 +390,18 @@ thresholding_parameters2 = newArray("Bernsen","Contrast","Mean","Median","MidGre
 		endAt=Dialog.getNumber();
 		roichoice=Dialog.getCheckbox();
 		
-		if (use_batchmode) {
-			setBatchMode(true);
-		} else {
-			setBatchMode("show");
-		}
-			
 		if(auto_or_autolocal == "Auto thresholding"){
-			
+			setBatchMode("show");
 			for (i=(startAt-1); i<(endAt); i++){
-			
-				if (use_batchmode) {
-					print("Thresholding in progress, image " + (i + 1) + " out of " + endAt); //have some kind of update while in batchmode
-				} 
 				thresholding(subregion_dir, output, subregion_input[i]);
 				}
 		}
 		
 		if(auto_or_autolocal == "Auto local thresholding"){
-		
+			setBatchMode("show");
 			for (i=(startAt-1); i<(endAt); i++){
-			
-				if (use_batchmode) {
-					print("Thresholding in progress, image " + (i + 1) + " out of " + endAt); //have some kind of update while in batchmode
-				} 
 				thresholding2(subregion_dir, output, subregion_input[i]);
 				}
-		}
-		
-		if (use_batchmode) {
-			setBatchMode(false);
 		}
 		
 		// SAVE AREA MEASURES
@@ -410,6 +410,8 @@ thresholding_parameters2 = newArray("Bernsen","Contrast","Mean","Median","MidGre
 	   	run("Close");
 		
 		print("Thresholding finished");
+		selectWindow("ROI Manager");
+	    run("Close");
 
 // Progress message
 		Dialog.create("MicrogliaMorphology");
@@ -417,11 +419,10 @@ thresholding_parameters2 = newArray("Bernsen","Contrast","Mean","Median","MidGre
 		Dialog.addMessage("we will generate single-cell ROIs");
 		Dialog.show();
 
-// STEP 2. Generating single-cell ROIs command
+// STEP 3. Generating single-cell ROIs command
 
   		//use file browser to choose path and files to run plugin on
 		setOption("JFileChooser",true);
-		File.setDefaultDir(output); //per default set it to the directory that was just output 
 		thresholded_dir=getDirectory("Choose parent folder containing thresholded images");
 		thresholded_input=getFileList(thresholded_dir);
 		count=thresholded_input.length;
@@ -429,6 +430,10 @@ thresholding_parameters2 = newArray("Bernsen","Contrast","Mean","Median","MidGre
 		//use file browser to choose path and files to run plugin on
 		setOption("JFileChooser",true);
 		cellROI_output=getDirectory("Choose output folder to write single cell images to");
+		
+		//use file browser to choose path and files to save ROI Zips to
+		setOption("JFileChooser",true);
+		ROI_zip_output=getDirectory("Choose output folder to write ROI Zips to");
 		
 		//dialog box
 		Dialog.create("MicrogliaMorphology");
@@ -438,29 +443,18 @@ thresholding_parameters2 = newArray("Bernsen","Contrast","Mean","Median","MidGre
 		Dialog.addMessage("which has this many images:");
 		Dialog.addMessage(count);
 		Dialog.addMessage("Select range of images you'd like to analyze");
-		Dialog.addNumber("Start at Image:", startAt);
-		Dialog.addNumber("Stop at Image:", endAt);
+		Dialog.addNumber("Start at Image:", 1);
+		Dialog.addNumber("Stop at Image:", 1);
 		Dialog.show();
 		
 		startAt=Dialog.getNumber();
 		endAt=Dialog.getNumber();
 		
-		if (use_batchmode) {
-			setBatchMode(true);
-		} else {
-			setBatchMode("show");
-		}
+		setBatchMode("show");
 		for (i=(startAt-1); i<(endAt); i++){
-			if (use_batchmode) {
-				print("Creating single cell ROI, image " + (i + 1) + " out of " + endAt); //have some kind of update while in batchmode
-			} 
-				cellROI(thresholded_dir, cellROI_output, thresholded_input[i], area_min, area_max);
+				cellROI(thresholded_dir, cellROI_output, ROI_zip_output, thresholded_input[i], area_min, area_max);
 		}
-		
-		
-		if (use_batchmode) {
-			setBatchMode(false);
-		}
+		//setBatchMode(false);
 		
 	    print("Finished generating single cell ROIs");
 
@@ -470,11 +464,10 @@ thresholding_parameters2 = newArray("Bernsen","Contrast","Mean","Median","MidGre
 		Dialog.addMessage("we will analyze their skeletons");
 		Dialog.show();
 
-// STEP 3. Skeletonize/AnalyzeSkeleton
+// STEP 4. Skeletonize/AnalyzeSkeleton
         
         //use file browser to choose path and files to run plugin on
 		setOption("JFileChooser",true);
-		File.setDefaultDir(cellROI_output);
 		cell_dir=getDirectory("Choose parent folder containing single-cell images");
 		cell_input=getFileList(cell_dir);
 		cell_count=cell_input.length;
@@ -495,27 +488,16 @@ thresholding_parameters2 = newArray("Bernsen","Contrast","Mean","Median","MidGre
 		Dialog.addMessage("which has this many images:");
 		Dialog.addMessage(cell_count);
 		Dialog.addMessage("Select range of cell images you'd like to analyze");
-		Dialog.addNumber("Start at Image:", startAt);
-		Dialog.addNumber("Stop at Image:", endAt);
+		Dialog.addNumber("Start at Image:", 1);
+		Dialog.addNumber("Stop at Image:", 1);
 		Dialog.show();
 		
 		startAt=Dialog.getNumber();
 		endAt=Dialog.getNumber();
        
-    	if (use_batchmode) {
-			setBatchMode(true);
-		} else {
-			setBatchMode("show");
-		}
+    	setBatchMode("show");
 		for (i=(startAt-1); i<(endAt); i++){
-			if (use_batchmode) {
-				print("Analyzing skeletons, image " + (i + 1) + " out of " + endAt); //have some kind of update while in batchmode
-			} 
 				skeleton(cell_dir, skeleton_output, skeleton2_output, cell_input[i]);
-		}
-		
-		if (use_batchmode) {
-			setBatchMode(false);
 		}
 		
 		print("Finished Analyzing Skeletons");
