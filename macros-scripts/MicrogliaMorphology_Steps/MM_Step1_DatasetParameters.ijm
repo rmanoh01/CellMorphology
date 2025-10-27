@@ -1,7 +1,7 @@
 //// Microglia Morphology ImageJ macro
 //// STEP 1: Determining dataset-specific parameters to use
 //// Created by Jenn Kim on September 18, 2022
-//// Updated July 29, 2024
+//// Updated by Rohin Manohar on October 27, 2025
 
 // FUNCTIONS
 
@@ -46,6 +46,7 @@ function thresholding(input, output, filename) {
 		saveAs("Tiff", output + filename + "_thresholded");
 		
 		close();
+		
 	}
 	
 // Auto local thresholding 
@@ -89,15 +90,15 @@ function thresholding2(input, output, filename) {
 		saveAs("Tiff", output + filename + "_thresholded");
 		
 		close();
+		
 	}
+
 
 
 // choices in drop-down prompts for MicrogliaMorphology macro
 thresholding_approach = newArray("Auto thresholding", "Auto local thresholding");
 thresholding_parameters = newArray("Huang","Huang2","Intermodes","IsoData","Li","MaxEntropy","Mean","MinError(I)","Minimum","Moments","Otsu","Percentile","RenyiEntropy","Shanbhag","Triangle","Yen")
 thresholding_parameters2 = newArray("Bernsen","Contrast","Mean","Median","MidGrey","Niblack","Otsu","Phansalkar","Sauvola");
-
-
 
 // MACRO STARTS HERE
 
@@ -215,20 +216,43 @@ thresholding_parameters2 = newArray("Bernsen","Contrast","Mean","Median","MidGre
 		
 		selectWindow("Results");
 		run("Close");
-		waitForUser("Select a particle that you would consider TOO BIG to be a single microglia cell and click letter m on your keyboard to measure its area. Do this a total of 5 times. Don't click OK until you're done with this!");
-		run("Summarize");
-		//number_rows = nResults;
-		area_max = getResult("Area", nResults-2);
+		
+		// --- MODIFIED SECTION START ---
+		waitForUser("Select a particle that you would consider TOO BIG to be a single microglia cell and click letter m on your keyboard to measure its area. Do this a total of 5 times. \n\nIF YOU WANT TO MANUALLY ENTER AN UPPER LIMIT OR USE A DEFAULT, CLICK OK WITHOUT MEASURING ANYTHING.");
+		
+		// Check if any measurements were made for the upper limit
+		if (nResults() > 0) {
+		    // If yes, calculate area_max from the measurements
+		    run("Summarize");
+		    area_max = getResult("Area", nResults-2);
+		    print("User-defined upper area limit set to: " + area_max);
+		} else {
+		    // If no measurements were made, ask user to manually enter or use default
+		    Dialog.create("Upper Area Limit");
+		    Dialog.addMessage("You did not measure any particles for the upper area limit.");
+		    Dialog.addMessage("Please choose how to set the upper area limit:");
+		    Dialog.addNumber("Enter upper area limit (or leave as 2500 for default):", 2500);
+		    Dialog.show();
+		    
+		    area_max = Dialog.getNumber();
+		    print("Upper area limit set to: " + area_max);
+		}
+		
+		// Safely close the Results table only if it exists
+		if (isOpen("Results")) {
+		    selectWindow("Results");
+		    run("Close");
+		}
 		
 		// close everything before starting with rest of macro
-		selectWindow("Results");
-		run("Close");
 		selectImage(nImages());
 		run("Close");
 		selectWindow("ROI Manager");
 	    run("Close");
 	    selectWindow("B&C");
 	    run("Close");
+	    
+		// --- MODIFIED SECTION END ---
 	    
 	    // conditional printing for saving final parameters
 		if(auto_or_autolocal == "Auto thresholding"){
@@ -246,7 +270,7 @@ thresholding_parameters2 = newArray("Bernsen","Contrast","Mean","Median","MidGre
 	    		 "Lower cell area filter = " + area_min + " \n" + 
 	    		 "Upper cell area filter = " + area_max);
 	    File.close(f);
-		
+				
 // Progress message: print summary statement of parameters
 		Dialog.create("MicrogliaMorphology");
 		Dialog.addMessage("Here is a summary of your dataset-specific parameters that will be applied in MicrogliaMorphology");
@@ -269,4 +293,5 @@ thresholding_parameters2 = newArray("Bernsen","Contrast","Mean","Median","MidGre
 		Dialog.addMessage(area_min);
 		Dialog.addMessage("UPPER CELL AREA FILTER:");
 		Dialog.addMessage(area_max);
+		Dialog.addMessage("Ready to continue");
 		Dialog.show();
