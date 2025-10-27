@@ -1,375 +1,227 @@
 // Color-by-cluster morphology script
-// Jenn Kim
-// July 25, 2024
- 
-// FUNCTIONS
+// Last modified October 27, 2025
 
-// find ROIs by name
-// function adapted from:
-// https://forum.image.sc/t/selecting-roi-based-on-name/3809 
+// ============== FUNCTIONS ==============
+// These should be at the top of your script.
+
+// Function to find an ROI by its exact name
 function findRoiWithName(roiName) { 
-	nR = roiManager("Count"); 
- 
-	for (i=0; i<nR; i++) { 
-		roiManager("Select", i); 
-		rName = Roi.getName(); 
-		if (matches(rName, roiName)) { 
-			return i; 
-		} 
-	} 
-} 
-
-// Function to open the file
-function openFile(filePath) {
-    if (File.exists(filePath)) {
-        open(filePath);
-    } 
+    nR = roiManager("Count"); 
+    for (i=0; i<nR; i++) { 
+        roiManager("Select", i); 
+        rName = Roi.getName(); 
+        if (matches(rName, roiName)) { 
+            return i; // Found it! Return the index.
+        } 
+    }
+    return -1; // Return -1 if no match is found
 }
 
-// Function to list files and search for matching filenames
-function listFiles(dir, numFiles, fileList, searchString) {
-    //dir = File.openDirectory(directory);
-    //dir = directory;
-    //numFiles = dir.getFileCount();
-    for (i = 0; i < (numFiles); i++) {
+// Function to find a matching file in a directory
+// Function to find a matching file in a directory (with corrected matching logic)
+function listFiles(dir, fileList, searchString, openFunction) {
+    searchLength = lengthOf(searchString);
+    for (i = 0; i < fileList.length; i++) {
         fileName = fileList[i];
-        if (substring(fileName, 0, lengthOf(searchString)) == searchString){
-        	openFile(dir + fileName);
-            print(dir + fileName);
+        
+        // Check if the filename starts with the base search string
+        if (startsWith(fileName, searchString)) {
+            
+            // This check prevents "image_1" from matching "image_10".
+            if (lengthOf(fileName) > searchLength) {
+                nextChar = substring(fileName, searchLength, searchLength + 1);
+                
+                // --- THIS LINE IS THE FIX ---
+                // We use the built-in 'matches' function to check if the character is a digit from 0-9.
+                if (matches(nextChar, "[0-9]")) {
+                    continue; // This is a false match (like the '0' in '..._10'), so skip it.
+                }
+            }
+            
+            // If the check passes, we have a true match.
+            if (openFunction) { open(dir + fileName); }
+            print("Found matching file: " + dir + fileName);
+            return dir + fileName;
         }
+    }
+    return ""; // Return an empty string if no file is found
+}
+
+
+// ============== MACRO STARTS HERE ==============
+
+// Welcome messages (optional, can be removed)
+Dialog.create("MicrogliaMorphology");
+Dialog.addMessage("Welcome to the updated ColorByCluster feature!");
+Dialog.addCheckbox("Do you want to use batch mode for a set of images?", true);
+Dialog.show();
+batchmodechoice = Dialog.getCheckbox();
+
+// Define cluster colors for the entire macro
+colorArray = newArray("BBCC33", "44BB99", "EEDD88", "EE8866", "red", "green", "blue", "yellow", "orange", "cyan");
+
+// Main logic for batch vs. single image mode
+if (batchmodechoice) {
+    // --- BATCH PROCESSING MODE ---
+    setOption("JFileChooser",true);
+    
+    original_dir = getDirectory("Choose folder with original .tiff images");
+    original_list = getFileList(original_dir);
+    roi_dir = getDirectory("Choose folder with ROI sets (.zip files)");
+    roi_list = getFileList(roi_dir);
+    clusters_dir = getDirectory("Choose folder with ColorByCluster .csv files");
+    clusters_list = getFileList(clusters_dir);
+    output_dir = getDirectory("Choose directory to save your final ColorByCluster images");
+
+    run("ROI Manager...");
+
+    // ... inside if (batchmodechoice) ...
+
+    run("ROI Manager...");
+
+    for (i=0; i < original_list.length; i++) {
+        
+        // Reset the ROI Manager for each new image.
+        roiManager("reset");
+        
+        original_image_name = original_list[i];
+        searchString = replace(original_image_name, ".tif", ""); 
+        print("Processing: " + searchString);
+
+        // Open original image and find corresponding files
+        open(original_dir + original_image_name);
+
+        roi_zip_path = listFiles(roi_dir, roi_list, searchString, false); 
+        if (roi_zip_path != "") {
+            roiManager("Open", roi_zip_path);
+        } else {
+            print("!!! WARNING: No matching ROI set found for " + searchString);
+            close("*");
+            continue; 
+        }
+        
+	cluster_csv_path = listFiles(clusters_dir, clusters_list, searchString, false);  // Don't auto-open
+	if (cluster_csv_path == "") {
+   	 print("!!! WARNING: No matching CSV file found for " + searchString);
+    	close("*");
+    	continue; 
+	}
+
+	// Close ONLY the CSV table from the previous iteration (not images or ROI Manager)
+	list = getList("window.titles");
+	for (j = 0; j < list.length; j++) {
+	    if (endsWith(list[j], ".csv")) {
+	        selectWindow(list[j]);
+	        run("Close");
+	    }
+	}
+
+// NOW open the CSV for this image
+open(cluster_csv_path);
+
+// Add a small delay to ensure the CSV is fully loaded
+wait(100);
+
+        // Color the ROIs based on the CSV data (this part is unchanged)
+        roiManager("Show All without labels");
+		roiManager("Set Color", "black");
+		
+		// Get the number of rows from the CSV table (not ROI Manager)
+		num_rows = Table.size;
+		print("CSV has " + num_rows + " cells, ROI Manager has " + roiManager("Count") + " ROIs");
+		
+		for(n=0; n < num_rows; n++) {
+		    cluster_num = parseInt(Table.getString("Cluster", n)); 
+		    id_from_csv = Table.getString("ID", n);
+		    roi_idx = findRoiWithName(id_from_csv);
+		    
+		    // THIS IS THE PROBLEM CASE - cell in CSV but not in ROI Manager
+		    if (roi_idx < 0) {
+		        print("!!! ERROR: ROI '" + id_from_csv + "' from CSV not found in ROI Manager for image " + searchString);
+		        // This shouldn't happen - means something is wrong with your data
+		        continue;
+		    }
+		    
+		    // Color the ROI if cluster number is valid
+		    if (cluster_num >= 1 && cluster_num <= colorArray.length) {
+		        roiManager("Select", roi_idx);
+		        Roi.setFillColor(colorArray[cluster_num - 1]);
+		    } else {
+		        print("Warning: Invalid cluster number " + cluster_num + " for ROI " + id_from_csv);
+		    }
+		}
+		
+		// After coloring, report how many ROIs were NOT colored (filtered out in R)
+		colored_count = num_rows;
+		total_rois = roiManager("Count");
+		uncolored_count = total_rois - colored_count;
+		print("Colored " + colored_count + " ROIs, " + uncolored_count + " ROIs left uncolored (filtered out in R)");
+		        
+        // --- THIS IS THE CORRECTED AND SIMPLIFIED SECTION ---
+        // Flatten the image. This creates a new RGB image with the colored ROIs.
+        run("Flatten");
+        
+        // Save the newly created flattened image.
+        saveAs("Tiff", output_dir + searchString + "_ColorByCluster.tif");
+        
+        // Reliably close ALL open windows (original, flattened, and CSV table)
+        // before starting the next loop.
+        close("*");
+        // --------------------------------------------------------
+    }
+
+    // This part runs after the loop is completely finished
+    selectWindow("ROI Manager");
+    run("Close");
+    print("Batch processing complete!");
+
+} else {
+    // --- SINGLE IMAGE MODE ---
+    setOption("JFileChooser",true);
+    
+    original_image_path = File.openDialog("Select the original .tiff image");
+    roi_zip_path = File.openDialog("Select the corresponding ROI set (.zip file)");
+    cluster_csv_path = File.openDialog("Select the corresponding cluster .csv file");
+
+    if (original_image_path=="" || roi_zip_path=="" || cluster_csv_path=="") {
+        print("User cancelled the operation. Macro stopped.");
+        return; 
+    }
+    
+    open(original_image_path);
+    run("ROI Manager...");
+    roiManager("Open", roi_zip_path);
+    open(cluster_csv_path);
+    
+    roiManager("Show All without labels");
+    roiManager("Set Color", "black");
+
+    num_rows = Table.size;
+    for(n=0; n < num_rows; n++) {
+        cluster_num = parseInt(Table.getString("Cluster", n)); 
+        id_from_csv = Table.getString("ID", n);
+        roi_idx = findRoiWithName(id_from_csv);
+        
+        if (roi_idx >= 0 && cluster_num >= 1 && cluster_num <= colorArray.length) {
+            roiManager("Select", roi_idx);
+            Roi.setFillColor(colorArray[cluster_num - 1]);
+        } else if (roi_idx < 0) {
+            print("Warning: ROI with name '" + id_from_csv + "' not found in ROI Manager.");
         }
     }
 
-
-// MACRO STARTS HERE
-
-//Welcome message
-		Dialog.create("MicrogliaMorphology");
-		Dialog.addMessage("Welcome to MicrogliaMorphology's ColorByCluster feature!");
-		Dialog.addMessage("The complimentary ColorByCluster features within MicrogliaMorphology and MicrogliaMorphologyR allow you to color your microglia cells by their morphological cluster IDs.");
-		Dialog.addMessage("This allows for visual verification of hypothesized cluster characterizations.");
-		Dialog.addMessage("Please make sure to use the complimentary MicrogliaMorphologyR package to generate your ColorByCluster.csv file prior to this step.");
-		Dialog.addMessage("If you have not done this yet, please do so first and come back to MicrogliaMorphology's ColorByCluster feature. If you are ready, continue on:");
-		Dialog.show();
-
-		Dialog.create("MicrogliaMorphology");
-		Dialog.addMessage("If you want to batch process your images for ColorByCluster, please make sure that your original input images, thresholded images,"); 
-		Dialog.addMessage("and ColorByCluster csv files all have the same starting string (see Github page for examples).");
-		Dialog.addCheckbox("Do you want to use batch mode for a set of images?", true);
-		Dialog.show();
-		
-		batchmodechoice = Dialog.getCheckbox();
-
-//use file browser to choose path and files to run plugin on
-
-// if batch mode = yes
-	if(batchmodechoice){
-		setOption("JFileChooser",true);
-		
-		// original input .tiff images
-		ColorByCluster_originalimages_dir = getDirectory("Choose parent folder containing original .tiff images that you used as input for MicrogliaMorphology");
-		ColorByCluster_originalimages = getFileList(ColorByCluster_originalimages_dir);
-		ColorByCluster_originalimages_count = ColorByCluster_originalimages.length;
-		
-		// thresholded .tiff images
-		ColorByCluster_thresholdedimages_dir = getDirectory("Choose parent folder containing thresholded .tiff images that were generated by MicrogliaMorphology from your original input images.");
-		ColorByCluster_thresholdedimages = getFileList(ColorByCluster_thresholdedimages_dir);
-		ColorByCluster_thresholdedimages_count = ColorByCluster_thresholdedimages.length;
-		
-		// ColorByCluster .csv files
-		ColorByCluster_clusters_dir = getDirectory("Select the .csv files generated from MicrogliaMorphologyR which contain the cluster labels for the final microglia cells from your images.");
-		ColorByCluster_clusters = getFileList(ColorByCluster_clusters_dir);
-		ColorByCluster_clusters_count = ColorByCluster_clusters.length;
-		
-		// Directory to save final ColorByCluster images to 
-		ColorByCluster_output = getDirectory("Select the directory you want to save your final ColorByCluster images to");
-		
-		// customize colors for up to 10 cluster labels
-		Dialog.create("MicrogliaMorphology");
-		Dialog.addMessage("In the sections below, specify what colors you want your morphological clusters to be in the image.");
-		Dialog.addMessage("You can format your color choices as HEX code (e.g., BBCC33)");
-		Dialog.addMessage("or any of the following colors: black, white, cyan, magenta, yellow, red, green, blue, and orange");
-		Dialog.addString("Cluster 1:", "BBCC33");
-		Dialog.addString("Cluster 2:", "44BB99");
-		Dialog.addString("Cluster 3:", "EEDD88");
-		Dialog.addString("Cluster 4:", "EE8866");
-		Dialog.addString("Cluster 5:", "red");
-		Dialog.addString("Cluster 6:", "green");
-		Dialog.addString("Cluster 7:", "blue");
-		Dialog.addString("Cluster 8:", "yellow");
-		Dialog.addString("Cluster 9:", "orange");
-		Dialog.addString("Cluster 10:", "cyan");
-		Dialog.show();	
-		
-		Cluster1 = Dialog.getString();
-		Cluster2 = Dialog.getString();
-		Cluster3 = Dialog.getString();
-		Cluster4 = Dialog.getString();
-		Cluster5 = Dialog.getString();
-		Cluster6 = Dialog.getString();
-		Cluster7 = Dialog.getString();
-		Cluster8 = Dialog.getString();
-		Cluster9 = Dialog.getString();
-		Cluster10 = Dialog.getString();
-		
-		// loop through original images
-		for(i=0; i<(ColorByCluster_originalimages_count); i++){
-			
-			// extract out common string to search for across folders from original .tiff files
-			ColorByCluster_originalimage = ColorByCluster_originalimages[i];
-			subStringArray = split(ColorByCluster_originalimage, "(\.tif)");
-			StringToSearchFor = subStringArray[0]; 
-			print(StringToSearchFor);
-			
-			// loop through thresholded folder, find the file with matching string, open, and print file name
-			listFiles(ColorByCluster_thresholdedimages_dir, ColorByCluster_thresholdedimages_count, ColorByCluster_thresholdedimages, StringToSearchFor);
-			
-			run("ROI Manager...");
-			roiManager("Show All");
-			roiManager("Show None");
-			run("Analyze Particles...", "pixel add");
-			close();
-				
-			// open original .tiff file and print file name
-			open(ColorByCluster_originalimages_dir + ColorByCluster_originalimage);
-			print(ColorByCluster_originalimages_dir + ColorByCluster_originalimage);
-			
-			// loop through ColorByCluster csv files folder, find the file with matching string, open, and print file name
-			listFiles(ColorByCluster_clusters_dir, ColorByCluster_clusters_count, ColorByCluster_clusters, StringToSearchFor);
-			
-			x = File.openAsString(ColorByCluster_clusters_dir + ColorByCluster_clusters[i]);
-			rows = split(x,"\n");	
-		
-			roiManager("Show All without labels");
-			roiManager("Set Color", "black");
-			
-			// ColorByCluster
-			for(n=0; n<rows.length-1; n++) {
-				cluster = Table.getString("Cluster",n);
-			
-					if(cluster==1){
-						label2 = Table.getString("ID",n);
-						roi_idx = findRoiWithName(label2);
-						roiManager("Select", roi_idx);
-						Roi.setFillColor(Cluster1);
-				}
-				
-					if(cluster==2){
-						label2 = Table.getString("ID",n);
-						roi_idx = findRoiWithName(label2);
-						roiManager("Select", roi_idx);
-						Roi.setFillColor(Cluster2);
-				}
-				
-					if(cluster==3){
-						label2 = Table.getString("ID",n);
-						roi_idx = findRoiWithName(label2);
-						roiManager("Select", roi_idx);
-						Roi.setFillColor(Cluster3);
-				}
-				
-					if(cluster==4){
-						label2 = Table.getString("ID",n);
-						roi_idx = findRoiWithName(label2);
-						roiManager("Select", roi_idx);
-						Roi.setFillColor(Cluster4);
-				}
-				
-					if(cluster==5){
-						label2 = Table.getString("ID",n);
-						roi_idx = findRoiWithName(label2);
-						roiManager("Select", roi_idx);
-						Roi.setFillColor(Cluster5);
-				}
-				
-					if(cluster==6){
-						label2 = Table.getString("ID",n);
-						roi_idx = findRoiWithName(label2);
-						roiManager("Select", roi_idx);
-						Roi.setFillColor(Cluster6);
-				}
-				
-					if(cluster==7){
-						label2 = Table.getString("ID",n);
-						roi_idx = findRoiWithName(label2);
-						roiManager("Select", roi_idx);
-						Roi.setFillColor(Cluster7);
-				}
-				
-					if(cluster==8){
-						label2 = Table.getString("ID",n);
-						roi_idx = findRoiWithName(label2);
-						roiManager("Select", roi_idx);
-						Roi.setFillColor(Cluster8);
-				}
-				
-					if(cluster==9){
-						label2 = Table.getString("ID",n);
-						roi_idx = findRoiWithName(label2);
-						roiManager("Select", roi_idx);
-						Roi.setFillColor(Cluster9);
-				}
-				
-					if(cluster==10){
-						label2 = Table.getString("ID",n);
-						roi_idx = findRoiWithName(label2);
-						roiManager("Select", roi_idx);
-						Roi.setFillColor(Cluster10);
-				}
-			
-			}
-			
-			run("Flatten");
-			
-			// save into ColorByCluster images
-			saveAs("Tiff", ColorByCluster_output + ColorByCluster_originalimage + "_ColorByCluster");
-			
-			// close everything
-			close();
-			close();
-			selectWindow("ROI Manager");
-			run("Close");
-			selectWindow(ColorByCluster_clusters[i]);
-			run("Close");
-		}
-		print("done!");
-	}
-
-// if batch mode = no
-else {
-		setOption("JFileChooser",true);
-		
-		ColorByCluster_originalimage = File.openDialog("Select the original .tiff image that you used as input for MicrogliaMorphology.");
-		ColorByCluster_thresholdedimage = File.openDialog("Select the thresholded .tiff image that was generated by MicrogliaMorphology from your original input image.");
-		ColorByCluster_clusters = File.openDialog("Select the .csv file generated from MicrogliaMorphologyR which contains the cluster labels for the final microglia cells.");
-		
-		open(ColorByCluster_thresholdedimage);
-		print(ColorByCluster_thresholdedimage);
-		run("ROI Manager...");
-		roiManager("Show All");
-		roiManager("Show None");
-		run("Analyze Particles...", "pixel add");
-		close();
-		
-		open(ColorByCluster_originalimage);
-		print(ColorByCluster_originalimage);
-		
-		open(ColorByCluster_clusters);
-		print(ColorByCluster_clusters);
-		
-		x = File.openAsString(ColorByCluster_clusters);
-		rows = split(x,"\n");	
-		
-		roiManager("Show All without labels");
-		roiManager("Set Color", "black");
-
-// customize colors for up to 10 cluster labels
-		//dialog box
-		Dialog.create("MicrogliaMorphology");
-		Dialog.addMessage("In the sections below, specify what colors you want your morphological clusters to be in the image.");
-		Dialog.addMessage("You can format your color choices as HEX code (e.g., BBCC33)");
-		Dialog.addMessage("or any of the following colors: black, white, cyan, magenta, yellow, red, green, blue, and orange");
-		Dialog.addString("Cluster 1:", "BBCC33");
-		Dialog.addString("Cluster 2:", "44BB99");
-		Dialog.addString("Cluster 3:", "EEDD88");
-		Dialog.addString("Cluster 4:", "EE8866");
-		Dialog.addString("Cluster 5:", "red");
-		Dialog.addString("Cluster 6:", "green");
-		Dialog.addString("Cluster 7:", "blue");
-		Dialog.addString("Cluster 8:", "yellow");
-		Dialog.addString("Cluster 9:", "orange");
-		Dialog.addString("Cluster 10:", "cyan");
-		Dialog.show();	
-		
-		Cluster1 = Dialog.getString();
-		Cluster2 = Dialog.getString();
-		Cluster3 = Dialog.getString();
-		Cluster4 = Dialog.getString();
-		Cluster5 = Dialog.getString();
-		Cluster6 = Dialog.getString();
-		Cluster7 = Dialog.getString();
-		Cluster8 = Dialog.getString();
-		Cluster9 = Dialog.getString();
-		Cluster10 = Dialog.getString();
-
-
-// ColorByCluster
-for(n=0; n<rows.length-1; n++) {
-	cluster = Table.getString("Cluster",n);
-
-		if(cluster==1){
-			label2 = Table.getString("ID",n);
-			roi_idx = findRoiWithName(label2);
-			roiManager("Select", roi_idx);
-			Roi.setFillColor(Cluster1);
-	}
+    run("Flatten");
+    
+	output_dir = getDirectory("Choose a folder to save the final image");
 	
-		if(cluster==2){
-			label2 = Table.getString("ID",n);
-			roi_idx = findRoiWithName(label2);
-			roiManager("Select", roi_idx);
-			Roi.setFillColor(Cluster2);
-	}
-	
-		if(cluster==3){
-			label2 = Table.getString("ID",n);
-			roi_idx = findRoiWithName(label2);
-			roiManager("Select", roi_idx);
-			Roi.setFillColor(Cluster3);
-	}
-	
-		if(cluster==4){
-			label2 = Table.getString("ID",n);
-			roi_idx = findRoiWithName(label2);
-			roiManager("Select", roi_idx);
-			Roi.setFillColor(Cluster4);
-	}
-	
-		if(cluster==5){
-			label2 = Table.getString("ID",n);
-			roi_idx = findRoiWithName(label2);
-			roiManager("Select", roi_idx);
-			Roi.setFillColor(Cluster5);
-	}
-	
-		if(cluster==6){
-			label2 = Table.getString("ID",n);
-			roi_idx = findRoiWithName(label2);
-			roiManager("Select", roi_idx);
-			Roi.setFillColor(Cluster6);
-	}
-	
-		if(cluster==7){
-			label2 = Table.getString("ID",n);
-			roi_idx = findRoiWithName(label2);
-			roiManager("Select", roi_idx);
-			Roi.setFillColor(Cluster7);
-	}
-	
-		if(cluster==8){
-			label2 = Table.getString("ID",n);
-			roi_idx = findRoiWithName(label2);
-			roiManager("Select", roi_idx);
-			Roi.setFillColor(Cluster8);
-	}
-	
-		if(cluster==9){
-			label2 = Table.getString("ID",n);
-			roi_idx = findRoiWithName(label2);
-			roiManager("Select", roi_idx);
-			Roi.setFillColor(Cluster9);
-	}
-	
-		if(cluster==10){
-			label2 = Table.getString("ID",n);
-			roi_idx = findRoiWithName(label2);
-			roiManager("Select", roi_idx);
-			Roi.setFillColor(Cluster10);
-	}
-
+	if (output_dir != "") {
+	    original_name = File.getName(original_image_path);
+	    output_name = replace(original_name, ".tif", "_ColorByCluster.tif");
+	    save_path = output_dir + output_name;
+	    
+	    saveAs("Tiff", save_path);
+	    print("Saved final image to: " + save_path);
+	} else {
+	    print("Save cancelled by user. The colored image will remain open.");
 }
-
-run("Flatten");
-print("done!");
-
 }
