@@ -115,6 +115,25 @@ that you watch this prior to beginning to use MicrogliaMorphology!
 
 [![Video](./images/VideoScreenshot.png)](https://www.youtube.com/watch?v=YhLCdlFLzk8)
 
+**Preprocessing Steps for Microglia and Astrocyte Files**
+1. In FIJI, go to Process -> Batch -> Macro:
+2. Select your input folder for raw images and output into SingleChannelTiffs_Input
+3. IMPORTANT: Test out one image first to confirm you are filtering out and selecting the
+   right channel for analysis. Also test out optimal settings for a few random images in
+   your batch if batch processing. These settings below are what I found worked best for
+   the images from our particular microscope and staining practices. 
+5. Output format = TIFF
+6. In the macro box, paste:
+        setBatchMode(true);
+        run("Set Scale...", "distance=3.18 known=1 pixel=1.000 unit=micron");
+        run("8-bit");
+        Stack.setChannel(2);
+        run("Delete Slice");
+        run("Grays");
+        run("Enhance Local Contrast (CLAHE)", "blocksize=50 histogram=256 maximum=2.5 mask=*None*");
+        run("Subtract Background...", "rolling=25");
+7. Check the outputs from this macro and manually adjust certain images' thresholds if they are under/overexposed, etc.
+
 ## Steps in MicrogliaMorphology and how to navigate them
 
 ### 1. Determine dataset-specific parameters to use in Steps 3-4
