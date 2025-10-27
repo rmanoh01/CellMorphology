@@ -115,7 +115,7 @@ that you watch this prior to beginning to use MicrogliaMorphology!
 
 [![Video](./images/VideoScreenshot.png)](https://www.youtube.com/watch?v=YhLCdlFLzk8)
 
-**Preprocessing Steps for Microglia and Astrocyte Files**
+## Preprocessing Steps for Microglia and Astrocyte Files
 1. In FIJI, go to Process -> Batch -> Macro:
 2. Select your input folder for raw images and output into SingleChannelTiffs_Input
 3. IMPORTANT: Test out one image first to confirm you are filtering out and selecting the
