@@ -1,7 +1,7 @@
 //// Microglia Morphology ImageJ macro
 //// STEP 4: Skeleton Analysis
 //// Created by Jenn Kim on September 18, 2022
-//// Updated July 29, 2024
+//// Updated by Rohin Manohar on October 27, 2025
 
 // FUNCTIONS
 
@@ -74,4 +74,4 @@ function skeleton(input, output, output2, filename) {
 		}
 		
 		print("Finished Analyzing Skeletons");
-	    print("done!");
+	    print("done! Continue on to FracLac");
