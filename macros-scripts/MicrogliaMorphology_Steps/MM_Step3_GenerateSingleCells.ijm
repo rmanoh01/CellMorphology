@@ -1,17 +1,18 @@
 //// Microglia Morphology ImageJ macro
 //// STEP 3: Generate single-cell images
 //// Created by Jenn Kim on September 18, 2022
-//// Updated July 29, 2024
+//// Updated by Rohin Manohar on October 27, 2025
 
 // FUNCTIONS
 
 //Generating Single Cell ROIs from thresholded images
-function cellROI(input, output, filename, min, max){
+function cellROI(input, output, ROI_zip_output, filename, min, max){
 		print(input + filename);
     	open(input + filename);
     	
     	mainTitle=getTitle();
 		dirCropOutput=output;
+		dirROIZipOutput=ROI_zip_output;
 		
 	    run("ROI Manager...");
 	    roiManager("Show All");
@@ -21,6 +22,9 @@ function cellROI(input, output, filename, min, max){
 		run("Analyze Particles...", "pixel add");
 		roiManager("Show All");
 		roiManager("Measure");	
+		
+		filename = replace(mainTitle, ".tif", ".zip");
+        roiManager("Save", dirROIZipOutput + File.separator + filename);
 				
 		for (i = 0; i < nResults(); i++) {
 		//for (i = 0; i < 5; i++) {
@@ -75,6 +79,10 @@ function cellROI(input, output, filename, min, max){
 		setOption("JFileChooser",true);
 		cellROI_output=getDirectory("Choose output folder to write single cell images to");
 		
+		//use file browser to choose path and files to save ROI Zips to
+		setOption("JFileChooser",true);
+		ROI_zip_output=getDirectory("Choose output folder to write ROI Zips to");
+		
 		//dialog box
 		Dialog.create("MicrogliaMorphology");
 		Dialog.addMessage("Processing files from directory:");
@@ -92,7 +100,7 @@ function cellROI(input, output, filename, min, max){
 		
 		setBatchMode("show");
 		for (i=(startAt-1); i<(endAt); i++){
-				cellROI(thresholded_dir, cellROI_output, thresholded_input[i], area_min, area_max);
+				cellROI(thresholded_dir, cellROI_output, ROI_zip_output, thresholded_input[i], area_min, area_max);
 		}
 		//setBatchMode(false);
 		
