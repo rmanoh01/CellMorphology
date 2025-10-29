@@ -180,9 +180,10 @@ input required)
       looking through ALL of the threshold methods to determine which is
       best for your dataset: capturing as many branches as possible that
       are connected to cell bodies, while minimizing overlap between
-      cells. ThresholdCheck will give you a gallery of 25 different
-      thresholding settings on the image you input - each image is color
-      coded accordingly - from the [BioVoxxel
+      cells. For the Lyden lab, I've had good luck with Phansalkar, but
+      again check all options! ThresholdCheck will give you a gallery of
+      25 different thresholding settings on the image you input - each
+      image is color coded accordingly - from the [BioVoxxel
       website](https://imagej.net/plugins/biovoxxel-toolbox#threshold-check),
       where you can find more information in the ThresholdCheck feature:
 
@@ -225,7 +226,9 @@ when picking representative cells on both extremes:
   single-cell, but not a single cell.
   - **When selecting particles that are too big to be considered single
     cells:** select particles that you would consider as 2 obviously
-    overlapping cells.
+    overlapping cells. NOTE: You no longer have to select a cell that is
+    too big. You can hit "OK" and then manually enter the size cutoff you
+    would like.
   - Here are examples of particles that are too small or too big to be
     considered single cells: ![](./images/CellAreaExamples.png)
 
@@ -292,6 +295,7 @@ of images. To run this macro, you will need the following:
 - Original immunofluorescent .tiff image(s) that was input into
   MicrogliaMorphology
 - Thresholded .tiff image(s) that was output by MicrogliaMorphology
+- ZIP_ROI files that was output by MicrogliaMorphology
 - ColorByCluster labels .csv file(s) generated using
   [MicrogliaMorphologyR](https://github.com/ciernialab/MicrogliaMorphologyR#colorbycluster)
 - For batch processing: new folder to write final ColorBycluster images
