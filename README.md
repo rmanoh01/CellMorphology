@@ -308,3 +308,5 @@ of images. To run this macro, you will need the following:
 If you are running individual images: After you finish running
 ColorByCluster on your image and saved your final outputs, make sure to
 **close all ImageJ windows** before proceeding to the next image!
+
+You can use the K_Means_Pipeline.R or Proxy_BI_Clustering_Astrocyte_Pipeline.R to prepare your data for the ColorByCluster plugin
