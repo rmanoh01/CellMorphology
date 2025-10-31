@@ -116,6 +116,10 @@ that you watch this prior to beginning to use MicrogliaMorphology!
 [![Video](./images/VideoScreenshot.png)](https://www.youtube.com/watch?v=YhLCdlFLzk8)
 
 ## Preprocessing Steps for Microglia and Astrocyte Files
+IF your images do not contain the treatment code and this is something you want to include in the analysis, PLEASE ADD IT IN PRIOR TO RUNNING ANY OF THE FOLLOWING STEPS
+  - Download or create a CSV containing two columms: One called 'Surgery ID' (AKA Mouse ID) and another called 'Treatment Group'
+  - Download and run rename_tif_files.py from this repo. Obviously, DO NOT run this on the original image folder. Run this on a copy. 
+
 1. In FIJI, go to Process -> Batch -> Macro:
 2. Select your input folder for raw images and output into SingleChannelTiffs_Input
 3. IMPORTANT: Test out one image first to confirm you are filtering out and selecting the
