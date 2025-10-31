@@ -127,7 +127,7 @@ IF your images do not contain the treatment code and this is something you want 
    your batch if batch processing. These settings below are what I found worked best for
    the images from our particular microscope and staining practices. 
 5. Output format = TIFF
-6. In the macro box, paste:  
+6. In the macro box, (MAKE SURE TO ADD ** around None, ex "*None*" paste:
         setBatchMode(true);  
         run("Set Scale...", "distance=3.18 known=1 pixel=1.000 unit=micron");  
         run("8-bit");  
