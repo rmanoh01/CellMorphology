@@ -1,0 +1,714 @@
+##This pipeline was tested on astrocytes BUT it should work on microglia with some
+##testing and modifications. You should test for the best feature to do 
+##univariate analysis on via the factor and loading analysis .R file as well as 
+##visuals from the K_Means_V2 file. I think Proxy_BI is a great approach, but 
+##You should also experiment with changing some features included in proxy_bi for 
+##microglia. This works on partially unblinded data - it needs animal ID ideally,
+##everything else is optional but recommended.
+
+# Fresh start - load libraries first
+library(MicrogliaMorphologyR)
+library(plotly)
+library(dplyr)
+library(cluster)
+library(NbClust)
+library(factoextra)
+library(ggplot2)
+library(tidyr)
+library(broom)
+
+
+# UPDATE THE VALUES BELOW WITH THE PROPER FILEPATHS
+
+
+fraclac.dir <- 
+skeleton.dir <- 
+
+output_dir <- 
+
+
+# Define paths to corrected or additional data (if you are merging in multiple
+# pipeline processing batches into one R analysis
+fraclac.dir.corrected <- 
+skeleton.dir.corrected <- 
+
+
+
+fraclac <- fraclac_tidying(fraclac.dir) 
+skeleton <- skeleton_tidying(skeleton.dir)
+data <- merge_data(fraclac, skeleton)
+head(data)
+
+
+# ============================================================
+# FILTERING SECTION - Edit this to exclude images, entire animals
+# ============================================================
+# Define Mouse_IDs to exclude (edit this list as needed)
+exclude_mouse_ids <- c()  # Add more IDs like: c("09292025004", "other_id", "another_id")
+
+# Define specific images to exclude (edit this list as needed)
+exclude_images <- c()  # Add more like: c("processed_05122025002_Transition_1_B", "image2", "image3")
+
+# Extract metadata FIRST so we have the Mouse_ID column
+finaldata <- metadata_columns(data, c("Processed","Mouse_ID", "Brain_Region", "Image_Number_In_Region", "Treatment"), sep="_")
+
+# Apply filter to remove matching Mouse_IDs
+print(paste("Total rows before filtering:", nrow(finaldata)))
+
+finaldata_filtered <- finaldata %>%
+  filter(!Mouse_ID %in% exclude_mouse_ids) %>%
+  filter(!grepl(paste(exclude_images, collapse="|"), UniqueID))
+
+print(paste("Total rows after filtering:", nrow(finaldata_filtered)))
+print(paste("Rows removed:", nrow(finaldata) - nrow(finaldata_filtered)))
+
+# Continue with filtered data
+finaldata <- finaldata_filtered
+# ============================================================
+
+
+
+# ============================================================
+# MERGE IN CORRECTED DATA OR ADDITIONAL ANALYSIS DATA
+# ============================================================
+print("Loading corrected or additional data...")
+
+
+# Load and process corrected data
+fraclac.corrected <- fraclac_tidying(fraclac.dir.corrected) 
+skeleton.corrected <- skeleton_tidying(skeleton.dir.corrected)
+data.corrected <- merge_data(fraclac.corrected, skeleton.corrected)
+
+# Extract metadata for corrected data
+data.corrected.meta <- metadata_columns(data.corrected, 
+                                        c("Processed","Mouse_ID", "Brain_Region", "Image_Number_In_Region", "Treatment"), 
+                                        sep="_")
+
+# Optional: Filter corrected data for specific images if needed
+data.corrected.meta <- data.corrected.meta %>%
+  filter(!grepl(paste(exclude_images, collapse="|"), UniqueID))
+
+print(paste("Corrected data rows:", nrow(data.corrected.meta)))
+
+# Merge corrected data with filtered data
+finaldata <- bind_rows(finaldata, data.corrected.meta)
+
+print(paste("Total rows after merging corrected or additional data:", nrow(finaldata)))
+# ============================================================
+
+
+
+
+
+# ============================================================
+# NEW: FILTER FOR CELLS WITH 1+ BRANCHES
+# ============================================================
+print(paste("Total cells before branch filtering:", nrow(finaldata)))
+
+finaldata <- finaldata %>%
+  filter(`# of branches` >= 1)
+
+print(paste("Total cells after branch filtering:", nrow(finaldata)))
+print(paste("Cells with 0 branches removed:", nrow(finaldata_filtered) - nrow(finaldata)))
+
+# ============================================================
+
+
+
+# ============================================================
+# NEW: FILTER OUT HIGHLY CIRCULAR CELLS (NOISE)
+# I recommend messing around with these settings quite a bit 
+# based on your data. You want to filter out noise but not 
+# real signal based on your data, which is hard. The 
+# ColorByCluster visualization will help you see this 
+# ============================================================
+print(paste("Total cells before circularity filtering:", nrow(finaldata)))
+
+# Optional: Check circularity distribution before filtering
+print(summary(finaldata$Circularity))
+hist(finaldata$Circularity)
+
+finaldata <- finaldata %>%
+  filter(Circularity < 0.98) %>% 
+  filter(Area < 20000)  # Remove extreme outliers (less than top ~1%). Please change this if and as needed
+
+print(paste("Total cells after circularity filtering:", nrow(finaldata)))
+print(paste("Highly circular cells removed (>= 0.98):", 
+            nrow(finaldata_filtered) - nrow(finaldata)))
+
+# ============================================================
+
+
+# Add this right after your filtering section, before any analysis
+
+# Check current unique values
+print("Brain regions BEFORE standardization:")
+print(unique(finaldata$Brain_Region))
+
+# Standardize to Title Case (or you can use tolower() for all lowercase)
+finaldata <- finaldata %>%
+  mutate(
+    Brain_Region = str_to_title(Brain_Region)
+    #Treatment = str_to_title(Treatment)  # Also standardize treatment if needed
+  ) %>%
+  # Fix typo: "Tramsition" -> "Transition"
+  mutate(
+    Brain_Region = case_when(
+      Brain_Region == "Tramsition" ~ "Transition",
+      TRUE ~ Brain_Region
+    )
+  )
+
+# Alternative: Use lowercase for everything
+# finaldata <- finaldata %>%
+#   mutate(Brain_Region = tolower(Brain_Region))
+
+print("Brain regions AFTER standardization:")
+print(unique(finaldata$Brain_Region))
+
+
+# ============================================================
+# CREATE (PROXY) BRANCHING AND RAMIFICATION INDEX
+# ============================================================
+
+
+# --- Step 1: Calculate the simple Ramification Index ---
+# This creates the new 'ramification_index' column.
+finaldata <- finaldata %>%
+  mutate(ramification_index = Perimeter / Area)
+
+# 1. DEFINE THE REFINED FEATURE SETS
+# Features for the "Complexity Score"
+complexity_features <- c(
+  "# of branches",
+  "# of junctions",
+  "# of end point voxels",
+  "# of triple points",
+  "Relative variation (CV) in radii from circle's center of mass" # Adds shape irregularity
+  #"Average branch length" #Remove for microglia, keep for astrocytes
+)
+
+# Feature for the "Territory Score"
+territory_feature <- "Maximum radius from hull's center of mass"
+
+
+# --- Create temporary, scaled versions of the features for the calculation ---
+scaled_complexity_data <- finaldata %>%
+  select(all_of(complexity_features)) %>%
+  mutate(across(everything(), ~ as.vector(scale(.))))
+
+scaled_territory_data <- finaldata %>%
+  select(all_of(territory_feature)) %>%
+  mutate(across(everything(), ~ as.vector(scale(.))))
+
+# --- Calculate the scores from the temporary scaled data ---
+complexity_score <- rowSums(scaled_complexity_data)
+territory_score <- scaled_territory_data[[1]] # Extract as a vector
+
+# --- Add the scores to the main data frame and calculate the final Proxy_BI ---
+finaldata_with_indices <- finaldata %>%
+  mutate(
+    complexity_score = complexity_score,
+    territory_score = territory_score
+  ) %>%
+  # Normalize scores to be positive and comparable (0-1 range)
+  mutate(
+    complexity_score_norm = (complexity_score - min(complexity_score)) / (max(complexity_score) - min(complexity_score)),
+    territory_score_norm = (territory_score - min(territory_score)) / (max(territory_score) - min(territory_score))
+  ) %>%
+  # Finally, calculate the Proxy Branching Index
+  mutate(Proxy_BI = complexity_score_norm * territory_score_norm) %>%
+  # Optional: You can remove the intermediate score columns if you only want the final indices
+  select(-complexity_score, -territory_score, -complexity_score_norm, -territory_score_norm) 
+
+
+# --- VERIFICATION ---
+# View the new indices
+select(finaldata_with_indices, ID, ramification_index) %>% head()
+# ============================================================
+
+
+
+
+#Clean the data before log transformation
+
+# Option 1: Remove rows with Inf or NaN values
+print(paste("Total rows before cleaning:", nrow(finaldata_with_indices)))
+
+finaldata_clean <- finaldata_with_indices %>%
+  filter(if_all(8:35, ~ !is.na(.) & !is.infinite(.)))
+
+print(paste("Total rows after cleaning:", nrow(finaldata_clean)))
+print(paste("Rows removed:", nrow(finaldata_with_indices) - nrow(finaldata_clean)))
+
+
+
+# ============================================================
+# ASTROCYTE-SPECIFIC CLUSTERING FOR STROKE ANALYSIS
+# ============================================================
+
+# Step 1: Analyze key metrics for astrocyte biology
+print("=== DISTRIBUTION ANALYSIS FOR ASTROCYTE FEATURES ===")
+
+astrocyte_features <- c("Proxy_BI", "Area", "# of branches", 
+                        "# of end point voxels", "Circularity",
+                        "Average branch length")
+
+summary_stats <- finaldata_clean %>%
+  summarise(across(all_of(astrocyte_features), 
+                   list(min = ~min(., na.rm=TRUE),
+                        q25 = ~quantile(., 0.25, na.rm=TRUE),
+                        median = ~median(., na.rm=TRUE),
+                        q75 = ~quantile(., 0.75, na.rm=TRUE),
+                        max = ~max(., na.rm=TRUE),
+                        mean = ~mean(., na.rm=TRUE))))
+
+print(summary_stats)
+
+# Step 2: Visualize Proxy_BI distribution
+par(mfrow=c(2,2))
+hist(finaldata_clean$Proxy_BI, breaks=50, main="Proxy_BI Distribution", 
+     xlab="Proxy_BI (Complexity)", col="skyblue", border="white")
+abline(v=quantile(finaldata_clean$Proxy_BI, c(0.25, 0.75)), col="red", lwd=2, lty=2)
+
+hist(finaldata_clean$Area, breaks=50, main="Area Distribution", 
+     xlab="Area (Cell Size)", col="lightgreen", border="white")
+abline(v=quantile(finaldata_clean$Area, c(0.25, 0.75)), col="red", lwd=2, lty=2)
+
+hist(finaldata_clean$`# of branches`, breaks=30, main="Branches Distribution",
+     xlab="# of Branches", col="coral", border="white")
+
+hist(finaldata_clean$Circularity, breaks=50, main="Circularity Distribution",
+     xlab="Circularity", col="plum", border="white")
+
+# Step 3: Define astrocyte-specific clusters
+# Based on Proxy_BI (primary complexity measure)
+proxy_bi_quantiles_alt <- quantile(finaldata_clean$Proxy_BI, probs=c(0, 0.25, 0.75, 1), na.rm=TRUE)
+
+print("=== CLUSTERING THRESHOLDS (Quartiles) ===")
+print(paste("Proxy_BI - Low threshold (25th percentile):", round(proxy_bi_quantiles_alt[2], 4)))
+print(paste("Proxy_BI - High threshold (75th percentile):", round(proxy_bi_quantiles_alt[3], 4)))
+
+# Create clusters with quartiles based on Proxy_BI only
+finaldata_astrocyte <- finaldata_clean %>%
+  mutate(
+    Astrocyte_Cluster_ProxyBI = case_when(
+      Proxy_BI >= proxy_bi_quantiles_alt[3] ~ 1,  # Top 25% - Highly ramified
+      Proxy_BI >= proxy_bi_quantiles_alt[2] ~ 2,  # Middle 50% - Moderately ramified
+      TRUE ~ 3  # Bottom 25% - Simplified
+    ),
+    
+    # Descriptive labels for interpretation
+    Morphology_State_ProxyBI = case_when(
+      Proxy_BI >= proxy_bi_quantiles_alt[3] ~ "Highly_Ramified",
+      Proxy_BI >= proxy_bi_quantiles_alt[2] ~ "Moderately_Ramified",
+      TRUE ~ "Simplified"
+    )
+  )
+
+# Step 4: Comprehensive summaries
+summary_proxy_bi <- finaldata_astrocyte %>%
+  group_by(Astrocyte_Cluster_ProxyBI, Morphology_State_ProxyBI) %>%
+  summarise(
+    n_cells = n(),
+    percent = round(n()/nrow(finaldata_astrocyte)*100, 1),
+    
+    # Complexity metrics
+    mean_proxy_bi = mean(Proxy_BI, na.rm = TRUE),
+    sd_proxy_bi = sd(Proxy_BI, na.rm = TRUE),
+    mean_branches = mean(`# of branches`, na.rm = TRUE),
+    sd_branches = sd(`# of branches`, na.rm = TRUE),
+    mean_endpoints = mean(`# of end point voxels`, na.rm = TRUE),
+    sd_endpoints = sd(`# of end point voxels`, na.rm = TRUE),
+    
+    # Size/shape metrics
+    mean_area = mean(Area, na.rm = TRUE),
+    sd_area = sd(Area, na.rm = TRUE),
+    mean_circularity = mean(Circularity, na.rm = TRUE),
+    
+    # Process characteristics
+    mean_branch_length = mean(`Average branch length`, na.rm = TRUE),
+    
+    .groups = "drop"
+  ) %>%
+  arrange(Astrocyte_Cluster_ProxyBI)
+
+print("=== PROXY_BI CLUSTERING SUMMARY ===")
+print(summary_proxy_bi)
+
+# Step 5: Visualizations
+
+# Proxy_BI distribution colored by cluster
+p1 <- ggplot(finaldata_astrocyte, aes(x=Proxy_BI, fill=Morphology_State_ProxyBI)) +
+  geom_histogram(bins=50, alpha=0.7, position="identity") +
+  scale_fill_manual(values=c("Highly_Ramified"="blue", 
+                             "Moderately_Ramified"="orange", 
+                             "Simplified"="red")) +
+  labs(title="Astrocyte Clustering by Proxy_BI",
+       x="Proxy_BI (Complexity Score)", y="Count",
+       fill="Morphological State") +
+  theme_minimal() +
+  theme(legend.position="top")
+print(p1)
+
+# 2D plot: Proxy_BI vs Area (for visualization purposes)
+p2 <- ggplot(finaldata_astrocyte, aes(x=Area, y=Proxy_BI, 
+                                      color=Morphology_State_ProxyBI)) +
+  geom_point(alpha=0.5, size=2) +
+  scale_color_manual(values=c("Highly_Ramified"="blue", 
+                              "Moderately_Ramified"="orange", 
+                              "Simplified"="red")) +
+  geom_hline(yintercept=proxy_bi_quantiles_alt[c(2,3)], linetype="dashed", color="gray40") +
+  labs(title="Astrocyte Clustering: Proxy_BI vs Area",
+       x="Area (Cell Size)", y="Proxy_BI (Complexity)",
+       color="Morphological State") +
+  theme_minimal() +
+  theme(legend.position="top")
+print(p2)
+
+
+
+
+
+
+
+
+# ============================================================
+# NEW: ANALYSIS BY BRAIN REGION AND TREATMENT (CSV GENERATION ONLY)
+# ============================================================
+# This section only generates CSV files for later graphing
+# All plotting has been removed
+
+# Combined analysis: Brain Region + Treatment
+if("Brain_Region" %in% names(finaldata_astrocyte) & "Treatment" %in% names(finaldata_astrocyte)) {
+  
+  # Overall by region (collapsed across treatments)
+  cluster_by_region <- finaldata_astrocyte %>%
+    count(Brain_Region, Morphology_State_ProxyBI) %>%
+    group_by(Brain_Region) %>%
+    mutate(percent = round(n/sum(n)*100, 1))
+  
+  print("=== CLUSTER DISTRIBUTION BY BRAIN REGION (All Treatments Combined) ===")
+  print(cluster_by_region)
+  
+  # Detailed breakdown: Brain Region + Treatment
+  cluster_by_region_treatment <- finaldata_astrocyte %>%
+    count(Brain_Region, Treatment, Morphology_State_ProxyBI) %>%
+    group_by(Brain_Region, Treatment) %>%
+    mutate(percent = round(n/sum(n)*100, 1)) %>%
+    ungroup()
+  
+  print("=== CLUSTER DISTRIBUTION BY BRAIN REGION AND TREATMENT ===")
+  print(cluster_by_region_treatment)
+  
+  # Save this detailed breakdown
+  write.csv(cluster_by_region_treatment, 
+            paste0(output_dir, "cluster_by_region_and_treatment.csv"), 
+            row.names = FALSE)
+  
+}
+
+# Overall treatment comparison (collapsed across regions)
+if("Treatment" %in% names(finaldata_astrocyte)) {
+  cluster_by_treatment <- finaldata_astrocyte %>%
+    count(Treatment, Morphology_State_ProxyBI) %>%
+    group_by(Treatment) %>%
+    mutate(percent = round(n/sum(n)*100, 1))
+  
+  print("=== CLUSTER DISTRIBUTION BY TREATMENT (All Regions Combined) ===")
+  print(cluster_by_treatment)
+  
+}
+
+# Save all results
+write.csv(summary_proxy_bi, 
+          paste0(output_dir, "astrocyte_proxybi_clustering_summary.csv"), 
+          row.names = FALSE)
+
+write.csv(cluster_by_region, 
+          paste0(output_dir, "cluster_by_region_combined.csv"), 
+          row.names = FALSE)
+
+# Output CSVs for FIJI (using Proxy_BI clustering)
+output_dir_astrocyte <- paste0(output_dir, "ColorByCluster_ProxyBI/")
+if(!dir.exists(output_dir_astrocyte)) {
+  dir.create(output_dir_astrocyte, recursive = TRUE)
+}
+
+unique_images_astro <- finaldata_astrocyte %>%
+  distinct(Processed, Mouse_ID, Brain_Region, Image_Number_In_Region, Treatment)
+
+for(i in 1:nrow(unique_images_astro)) {
+  img <- unique_images_astro[i,]
+  
+  colorbycluster <- finaldata_astrocyte %>%
+    filter(Processed == img$Processed,
+           Mouse_ID == img$Mouse_ID,
+           Brain_Region == img$Brain_Region,
+           Image_Number_In_Region == img$Image_Number_In_Region,
+           Treatment == img$Treatment) %>%
+    select(Astrocyte_Cluster_ProxyBI, ID) %>%
+    rename(Cluster = Astrocyte_Cluster_ProxyBI)
+  
+  filename <- paste0(output_dir_astrocyte, 
+                     img$Processed, "_", 
+                     img$Mouse_ID, "_",
+                     img$Brain_Region, "_",
+                     img$Image_Number_In_Region, "_",
+                     img$Treatment, "_astrocyte_data.csv")
+  
+  write.csv(colorbycluster, filename, row.names=FALSE)
+  print(paste("Created:", filename, "with", nrow(colorbycluster), "cells"))
+}
+
+# Summary interpretation guide
+cat("\n=== INTERPRETATION GUIDE FOR ASTROCYTE MORPHOLOGY ===\n")
+cat("Cluster 1 (Highly Ramified):\n")
+cat("  - Typically HOMEOSTATIC/RESTING astrocytes?\n")
+cat("  - Complex branching, fine processes\n\n")
+
+cat("Cluster 2 (Moderately Ramified):\n")
+cat("  - TRANSITIONAL or MILDLY REACTIVE astrocytes?\n")
+cat("  - Maintained complexity but may show early hypertrophy\n\n")
+
+cat("Cluster 3 (Simplified):\n")
+cat("  - SEVERELY REACTIVE astrocytes?\n")
+cat("  - Loss of fine processes, may be hypertrophic\n\n")
+
+
+
+
+# ============================================================
+# MEANS AND MEDIANS OF PROXY_BI COMPOSITE FEATURES
+# ============================================================
+# Calculate mean and median for each feature by cluster
+cluster_comparison <- finaldata_astrocyte %>%
+  group_by(Astrocyte_Cluster_ProxyBI, Morphology_State_ProxyBI) %>%
+  summarise(
+    # Proxy_BI
+    mean_proxy_bi = mean(Proxy_BI, na.rm = TRUE),
+    median_proxy_bi = median(Proxy_BI, na.rm = TRUE),
+    
+    # Area
+    mean_area = mean(Area, na.rm = TRUE),
+    median_area = median(Area, na.rm = TRUE),
+    
+    # Branches
+    mean_branches = mean(`# of branches`, na.rm = TRUE),
+    median_branches = median(`# of branches`, na.rm = TRUE),
+    
+    # End points
+    mean_endpoints = mean(`# of end point voxels`, na.rm = TRUE),
+    median_endpoints = median(`# of end point voxels`, na.rm = TRUE),
+    
+    # Circularity
+    mean_circularity = mean(Circularity, na.rm = TRUE),
+    median_circularity = median(Circularity, na.rm = TRUE),
+    
+    # Branch length
+    mean_branch_length = mean(`Average branch length`, na.rm = TRUE),
+    median_branch_length = median(`Average branch length`, na.rm = TRUE),
+    
+    n_cells = n(),
+    .groups = "drop"
+  ) %>%
+  arrange(Astrocyte_Cluster_ProxyBI)
+
+print(cluster_comparison)
+
+# Save the comparison
+write.csv(cluster_comparison, 
+          paste0(output_dir, "cluster_mean_median_comparison.csv"), 
+          row.names = FALSE)
+# ============================================================
+
+
+
+
+
+# ============================================================
+# AVERAGE CELL COUNTS PER SUBJECT PER BRAIN REGION
+# ============================================================
+# This section calculates the average number of cells per image
+# for each subject in each brain region, accounting for the fact
+# that different subjects may have different numbers of images
+# per region due to data cleaning/exclusions
+
+cat("\n\n=============================================================\n")
+cat("CALCULATING AVERAGE CELL COUNTS PER SUBJECT PER REGION\n")
+cat("=============================================================\n\n")
+
+# Step 1: Get the TOTAL number of images per subject per region (regardless of what's in them)
+n_images_per_region <- finaldata_astrocyte %>%
+  group_by(Mouse_ID, Treatment, Brain_Region) %>%
+  summarise(n_images = n_distinct(Image_Number_In_Region), .groups = "drop")
+
+print("=== Number of Images Per Subject Per Region ===")
+print(n_images_per_region)
+
+# Step 2: Count total cells per cluster per image
+cells_per_image_per_cluster <- finaldata_astrocyte %>%
+  group_by(Mouse_ID, Treatment, Brain_Region, Image_Number_In_Region, 
+           Astrocyte_Cluster_ProxyBI, Morphology_State_ProxyBI) %>%
+  summarise(n_cells = n(), .groups = "drop")
+
+# Step 3: Create a complete grid of all possible combinations
+# This ensures we have an entry for every cluster in every image, even if count is 0
+complete_grid <- finaldata_astrocyte %>%
+  distinct(Mouse_ID, Treatment, Brain_Region, Image_Number_In_Region) %>%
+  crossing(
+    data.frame(
+      Astrocyte_Cluster_ProxyBI = c(1, 2, 3),
+      Morphology_State_ProxyBI = c("Highly_Ramified", "Moderately_Ramified", "Simplified")
+    )
+  )
+
+# Step 4: Join with actual counts and fill missing with 0
+cells_complete <- complete_grid %>%
+  left_join(cells_per_image_per_cluster, 
+            by = c("Mouse_ID", "Treatment", "Brain_Region", "Image_Number_In_Region",
+                   "Astrocyte_Cluster_ProxyBI", "Morphology_State_ProxyBI")) %>%
+  mutate(n_cells = replace_na(n_cells, 0))
+
+# Step 5: Calculate average cells per cluster per subject per region
+# Now every cluster is represented in every image (with 0s where appropriate)
+avg_cells_by_cluster <- cells_complete %>%
+  group_by(Mouse_ID, Treatment, Brain_Region, 
+           Astrocyte_Cluster_ProxyBI, Morphology_State_ProxyBI) %>%
+  summarise(
+    total_cells = sum(n_cells),
+    avg_cells_per_image = mean(n_cells),
+    sd_cells_per_image = sd(n_cells),
+    .groups = "drop"
+  ) %>%
+  arrange(Mouse_ID, Brain_Region, Astrocyte_Cluster_ProxyBI)
+
+print("=== Average Cells Per Image by Cluster ===")
+print(avg_cells_by_cluster)
+
+# Step 6: Calculate total average cells per subject per region (all clusters combined)
+avg_total_cells <- cells_complete %>%
+  group_by(Mouse_ID, Treatment, Brain_Region, Image_Number_In_Region) %>%
+  summarise(total_cells_in_image = sum(n_cells), .groups = "drop") %>%
+  group_by(Mouse_ID, Treatment, Brain_Region) %>%
+  summarise(
+    total_cells_all_images = sum(total_cells_in_image),
+    avg_total_cells_per_image = mean(total_cells_in_image),
+    sd_total_cells_per_image = sd(total_cells_in_image),
+    .groups = "drop"
+  ) %>%
+  arrange(Mouse_ID, Brain_Region)
+
+print("=== Average Total Cells Per Image (All Clusters) ===")
+print(avg_total_cells)
+
+# Step 7: Create a wide-format table for easier viewing
+# This should now have EXACTLY one row per subject per region
+avg_cells_wide <- avg_cells_by_cluster %>%
+  select(Mouse_ID, Treatment, Brain_Region, Morphology_State_ProxyBI, 
+         avg_cells_per_image) %>%
+  pivot_wider(
+    names_from = Morphology_State_ProxyBI,
+    values_from = avg_cells_per_image,
+    names_prefix = "Avg_",
+    values_fill = 0
+  ) %>%
+  # Join in n_images 
+  left_join(n_images_per_region, by = c("Mouse_ID", "Treatment", "Brain_Region")) %>%
+  # Add total average cells
+  left_join(
+    avg_total_cells %>% select(Mouse_ID, Brain_Region, avg_total_cells_per_image),
+    by = c("Mouse_ID", "Brain_Region")
+  ) %>%
+  rename(Avg_Total_All_Clusters = avg_total_cells_per_image) %>%
+  # Reorder columns for clarity
+  select(Mouse_ID, Treatment, Brain_Region, n_images, 
+         Avg_Highly_Ramified, Avg_Moderately_Ramified, Avg_Simplified,
+         Avg_Total_All_Clusters) %>%
+  arrange(Mouse_ID, Brain_Region)
+
+print("=== Wide Format: Average Cells Per Image by Subject and Region ===")
+print(avg_cells_wide)
+
+# Verify: Check for any duplicates (should be 0)
+duplicates_check <- avg_cells_wide %>%
+  group_by(Mouse_ID, Brain_Region) %>%
+  filter(n() > 1)
+
+if(nrow(duplicates_check) > 0) {
+  cat("\nWARNING: Found duplicate rows:\n")
+  print(duplicates_check)
+} else {
+  cat("\n✓ SUCCESS: No duplicate rows found. Each subject has exactly one row per brain region.\n")
+}
+
+# Step 8: Save all results to CSV files
+write.csv(avg_cells_by_cluster, 
+          paste0(output_dir, "avg_cells_per_image_by_cluster.csv"), 
+          row.names = FALSE)
+cat("Saved: avg_cells_per_image_by_cluster.csv\n")
+
+write.csv(avg_total_cells, 
+          paste0(output_dir, "avg_total_cells_per_image.csv"), 
+          row.names = FALSE)
+cat("Saved: avg_total_cells_per_image.csv\n")
+
+write.csv(avg_cells_wide, 
+          paste0(output_dir, "avg_cells_per_image_wide_format.csv"), 
+          row.names = FALSE)
+cat("Saved: avg_cells_per_image_wide_format.csv\n")
+
+# Step 9: Create summary statistics across subjects
+summary_by_region_treatment <- avg_cells_wide %>%
+  group_by(Brain_Region, Treatment) %>%
+  summarise(
+    n_subjects = n(),
+    mean_images_per_subject = mean(n_images),
+    
+    # Highly Ramified
+    mean_highly_ramified = mean(Avg_Highly_Ramified, na.rm = TRUE),
+    sd_highly_ramified = sd(Avg_Highly_Ramified, na.rm = TRUE),
+    
+    # Moderately Ramified
+    mean_moderately_ramified = mean(Avg_Moderately_Ramified, na.rm = TRUE),
+    sd_moderately_ramified = sd(Avg_Moderately_Ramified, na.rm = TRUE),
+    
+    # Simplified
+    mean_simplified = mean(Avg_Simplified, na.rm = TRUE),
+    sd_simplified = sd(Avg_Simplified, na.rm = TRUE),
+    
+    # Total
+    mean_total = mean(Avg_Total_All_Clusters, na.rm = TRUE),
+    sd_total = sd(Avg_Total_All_Clusters, na.rm = TRUE),
+    
+    .groups = "drop"
+  )
+
+print("=== Summary: Mean Cells Per Image Across Subjects ===")
+print(summary_by_region_treatment)
+
+write.csv(summary_by_region_treatment, 
+          paste0(output_dir, "summary_avg_cells_by_region_treatment.csv"), 
+          row.names = FALSE)
+cat("Saved: summary_avg_cells_by_region_treatment.csv\n")
+
+cat("\n=============================================================\n")
+cat("AVERAGE CELL COUNT ANALYSIS COMPLETE!\n")
+cat("=============================================================\n")
+cat("\nKey outputs:\n")
+cat("1. avg_cells_per_image_by_cluster.csv - Detailed breakdown by cluster\n")
+cat("2. avg_total_cells_per_image.csv - Total cells per subject per region\n")
+cat("3. avg_cells_per_image_wide_format.csv - Easy-to-read wide format (ONE ROW PER SUBJECT PER REGION)\n")
+cat("4. summary_avg_cells_by_region_treatment.csv - Group-level summaries\n\n")
+
+cat("\n\n=============================================================\n")
+cat("ANALYSIS COMPLETE!\n")
+cat("=============================================================\n")
+cat("\nAll results have been saved to:", output_dir, "\n")
+
+
+
+
+
+
+
