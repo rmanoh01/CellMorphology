@@ -16,6 +16,7 @@ library(factoextra)
 library(ggplot2)
 library(tidyr)
 library(broom)
+library(ggpubr)
 
 
 # UPDATE THE VALUES BELOW WITH THE PROPER FILEPATHS
@@ -44,12 +45,13 @@ head(data)
 # FILTERING SECTION - Edit this to exclude images, entire animals
 # ============================================================
 # Define Mouse_IDs to exclude (edit this list as needed)
-exclude_mouse_ids <- c()  # Add more IDs like: c("09292025004", "other_id", "another_id")
+exclude_mouse_ids <- c("")  # Add more IDs like: c("09292025004", "other_id", "another_id")
 
 # Define specific images to exclude (edit this list as needed)
-exclude_images <- c()  # Add more like: c("processed_05122025002_Transition_1_B", "image2", "image3")
+exclude_images <- c("")  # Add more like: c("image1", "image2", "image3")
 
-# Extract metadata FIRST so we have the Mouse_ID column
+# Extract metadata FIRST so we have the Mouse_ID column. CHANGE THIS BASED ON YOUR FILE STRUCTURE
+# You will also have to change several lines downstream. MSG for help if needed to get this to work
 finaldata <- metadata_columns(data, c("Processed","Mouse_ID", "Brain_Region", "Image_Number_In_Region", "Treatment"), sep="_")
 
 # Apply filter to remove matching Mouse_IDs
@@ -102,6 +104,7 @@ print(paste("Total rows after merging corrected or additional data:", nrow(final
 
 # ============================================================
 # NEW: FILTER FOR CELLS WITH 1+ BRANCHES
+# You should likely comment this out for microglia
 # ============================================================
 print(paste("Total cells before branch filtering:", nrow(finaldata)))
 
@@ -430,7 +433,7 @@ write.csv(cluster_by_region,
           row.names = FALSE)
 
 # Output CSVs for FIJI (using Proxy_BI clustering)
-output_dir_astrocyte <- paste0(output_dir, "ColorByCluster_ProxyBI/")
+output_dir_astrocyte <- paste0(output_dir, "AstrocyteClusters_ProxyBI/")
 if(!dir.exists(output_dir_astrocyte)) {
   dir.create(output_dir_astrocyte, recursive = TRUE)
 }
@@ -711,4 +714,244 @@ cat("\nAll results have been saved to:", output_dir, "\n")
 
 
 
+# ============================================================
+# GRAPHING: STACKED BAR PLOTS BY BRAIN REGION WITH STATISTICS
+# ============================================================
 
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(ggpubr)
+
+# Load the wide format data
+avg_cells_wide <- read.csv(paste0(output_dir, "avg_cells_per_image_wide_format.csv"))
+
+# Reshape data to long format for plotting
+plot_data <- avg_cells_wide %>%
+  pivot_longer(
+    cols = c(Avg_Highly_Ramified, Avg_Moderately_Ramified, Avg_Simplified),
+    names_to = "Cell_Type",
+    values_to = "Avg_Cells"
+  ) %>%
+  mutate(
+    Cell_Type = factor(Cell_Type, 
+                       levels = c("Avg_Highly_Ramified", "Avg_Moderately_Ramified", "Avg_Simplified"),
+                       labels = c("Highly Ramified", "Moderately Ramified", "Simplified"))
+  )
+
+# Get unique brain regions
+brain_regions <- unique(plot_data$Brain_Region)
+
+# Function to perform statistical tests and create plot for each region
+create_region_plot <- function(region_name, plot_data) {
+  
+  # Filter data for this region
+  region_data <- plot_data %>%
+    filter(Brain_Region == region_name)
+  
+  # Statistical test: Two-way ANOVA (Cell_Type x Treatment)
+  show_stats <- FALSE
+  p_label <- ""
+  
+  if(length(unique(region_data$Treatment)) >= 2 && length(unique(region_data$Cell_Type)) >= 2) {
+    # Perform two-way ANOVA
+    anova_result <- aov(Avg_Cells ~ Cell_Type * Treatment, data = region_data)
+    anova_summary <- summary(anova_result)
+    
+    # Extract p-values for main effects and interaction
+    p_celltype <- anova_summary[[1]]$`Pr(>F)`[1]
+    p_treatment <- anova_summary[[1]]$`Pr(>F)`[2]
+    p_interaction <- anova_summary[[1]]$`Pr(>F)`[3]
+    
+    f_celltype <- anova_summary[[1]]$`F value`[1]
+    f_treatment <- anova_summary[[1]]$`F value`[2]
+    f_interaction <- anova_summary[[1]]$`F value`[3]
+    
+    # Build label for significant effects (p < 0.05)
+    sig_effects <- c()
+    
+    if(p_celltype < 0.05) {
+      if(p_celltype < 0.001) {
+        sig_effects <- c(sig_effects, sprintf("Cell Type: F=%.2f, p<0.001***", f_celltype))
+      } else if(p_celltype < 0.01) {
+        sig_effects <- c(sig_effects, sprintf("Cell Type: F=%.2f, p=%.3f**", f_celltype, p_celltype))
+      } else {
+        sig_effects <- c(sig_effects, sprintf("Cell Type: F=%.2f, p=%.3f*", f_celltype, p_celltype))
+      }
+    }
+    
+    if(p_treatment < 0.05) {
+      if(p_treatment < 0.001) {
+        sig_effects <- c(sig_effects, sprintf("Treatment: F=%.2f, p<0.001***", f_treatment))
+      } else if(p_treatment < 0.01) {
+        sig_effects <- c(sig_effects, sprintf("Treatment: F=%.2f, p=%.3f**", f_treatment, p_treatment))
+      } else {
+        sig_effects <- c(sig_effects, sprintf("Treatment: F=%.2f, p=%.3f*", f_treatment, p_treatment))
+      }
+    }
+    
+    if(p_interaction < 0.05) {
+      if(p_interaction < 0.001) {
+        sig_effects <- c(sig_effects, sprintf("Interaction: F=%.2f, p<0.001***", f_interaction))
+      } else if(p_interaction < 0.01) {
+        sig_effects <- c(sig_effects, sprintf("Interaction: F=%.2f, p=%.3f**", f_interaction, p_interaction))
+      } else {
+        sig_effects <- c(sig_effects, sprintf("Interaction: F=%.2f, p=%.3f*", f_interaction, p_interaction))
+      }
+    }
+    
+    # Only show stats if at least one effect is significant
+    if(length(sig_effects) > 0) {
+      show_stats <- TRUE
+      p_label <- paste(sig_effects, collapse = "; ")
+    }
+  }
+  
+  # Calculate means and SD for plotting
+  summary_data <- region_data %>%
+    group_by(Treatment, Cell_Type) %>%
+    summarise(
+      Mean = mean(Avg_Cells),
+      SD = sd(Avg_Cells),
+      .groups = "drop"
+    )
+  
+  # Calculate total height for each treatment (for positioning)
+  max_height <- summary_data %>%
+    group_by(Treatment) %>%
+    summarise(Total = sum(Mean) + sum(SD, na.rm = TRUE), .groups = "drop") %>%
+    pull(Total) %>%
+    max()
+  
+  # Calculate cumulative positions for error bars
+  summary_data <- summary_data %>%
+    group_by(Treatment) %>%
+    arrange(desc(Cell_Type)) %>%
+    mutate(
+      ymax = cumsum(Mean),
+      ymin = ymax - Mean,
+      error_pos = ymax
+    ) %>%
+    ungroup()
+  
+  # Create the base plot
+  p <- ggplot(summary_data, aes(x = Treatment, y = Mean, fill = Cell_Type)) +
+    geom_bar(stat = "identity", position = "stack", color = "black", width = 0.7) +
+    # Add error bars for each segment
+    geom_errorbar(aes(ymin = error_pos - SD, ymax = error_pos + SD),
+                  width = 0.2, position = position_identity(), linewidth = 0.5) +
+    scale_fill_manual(
+      values = c("Highly Ramified" = "#2E86AB", 
+                 "Moderately Ramified" = "#F77F00", 
+                 "Simplified" = "#D62828"),
+      name = "Cell Morphology"
+    ) +
+    labs(
+      title = paste0("Astrocyte Morphology: ", region_name),
+      x = "Treatment",
+      y = "Average Cells per Image"
+    ) +
+    theme_minimal() +
+    theme(
+      plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+      axis.title = element_text(size = 12, face = "bold"),
+      axis.title.x = element_text(face = "bold"),
+      axis.title.y = element_text(face = "bold"),
+      axis.text = element_text(size = 10),
+      legend.position = "right",
+      legend.title = element_text(size = 11, face = "bold"),
+      legend.text = element_text(size = 10),
+      panel.grid.major.x = element_blank()
+    )
+  
+  # Add subtitle only if there are significant effects (p < 0.05)
+  if(show_stats) {
+    p <- p + 
+      labs(subtitle = p_label) +
+      theme(plot.subtitle = element_text(size = 10, hjust = 0.5)) +
+      ylim(0, max_height * 1.2)
+  } else {
+    p <- p + ylim(0, max_height * 1.1)
+  }
+  
+  return(p)
+}
+
+# Generate plots for each brain region
+plots_list <- list()
+for(region in brain_regions) {
+  plots_list[[region]] <- create_region_plot(region, plot_data)
+  print(plots_list[[region]])
+  
+  # Save individual plots
+  ggsave(
+    filename = paste0(output_dir, "stacked_bar_", gsub(" ", "_", region), ".png"),
+    plot = plots_list[[region]],
+    width = 8,
+    height = 6,
+    dpi = 300
+  )
+}
+
+# Print statistical summary for each region
+cat("\n=== STATISTICAL SUMMARY BY BRAIN REGION (Two-Way ANOVA) ===\n")
+for(region in brain_regions) {
+  cat("\n", region, ":\n")
+  
+  region_data <- plot_data %>%
+    filter(Brain_Region == region)
+  
+  if(length(unique(region_data$Treatment)) >= 2 && length(unique(region_data$Cell_Type)) >= 2) {
+    # Show descriptive statistics
+    desc_stats <- region_data %>%
+      group_by(Treatment, Cell_Type) %>%
+      summarise(
+        n = n(),
+        mean = mean(Avg_Cells),
+        sd = sd(Avg_Cells),
+        .groups = "drop"
+      )
+    
+    print(desc_stats)
+    
+    # Perform two-way ANOVA
+    anova_result <- aov(Avg_Cells ~ Cell_Type * Treatment, data = region_data)
+    anova_summary <- summary(anova_result)
+    
+    cat("\n  Two-Way ANOVA Results:\n")
+    print(anova_summary)
+    
+    # Highlight significant effects
+    p_celltype <- anova_summary[[1]]$`Pr(>F)`[1]
+    p_treatment <- anova_summary[[1]]$`Pr(>F)`[2]
+    p_interaction <- anova_summary[[1]]$`Pr(>F)`[3]
+    
+    cat("\n  Significance Summary:\n")
+    cat(sprintf("    Cell Type effect: p=%.4f %s\n", 
+                p_celltype, 
+                ifelse(p_celltype < 0.05, 
+                       ifelse(p_celltype < 0.001, "***", 
+                              ifelse(p_celltype < 0.01, "**", "*")), 
+                       "(not significant)")))
+    
+    cat(sprintf("    Treatment effect: p=%.4f %s\n", 
+                p_treatment, 
+                ifelse(p_treatment < 0.05, 
+                       ifelse(p_treatment < 0.001, "***", 
+                              ifelse(p_treatment < 0.01, "**", "*")), 
+                       "(not significant)")))
+    
+    cat(sprintf("    Interaction effect: p=%.4f %s\n", 
+                p_interaction, 
+                ifelse(p_interaction < 0.05, 
+                       ifelse(p_interaction < 0.001, "***", 
+                              ifelse(p_interaction < 0.01, "**", "*")), 
+                       "(not significant)")))
+    cat("\n")
+  }
+}
+
+cat("\n=== GRAPHS SAVED ===\n")
+cat("All stacked bar plots have been saved to:", output_dir, "\n")
+cat("Statistical annotations only shown for effects with p < 0.05\n")
+cat("Error bars represent standard deviation for each cell type\n")
