@@ -5,6 +5,21 @@ MicrogliaMorphology
 
 **Created**: 15 June, 2023 **Last updated**: 28 October, 2025
 
+*Important Note*
+Changes in this fork were created to streamline this pipeline for researchers 
+within a stroke lab during a rotation in the first year of my PhD.
+Ultimate goals of the fork:
+  1. Better functionality for batch processing of images without ROIs.
+  2. Proper saving of files throughout pipeline so that errors or crashes
+     during the program do not require starting from square one.
+  3. Updated README to document new steps and changes in user processing.
+  4. Created an approximated branching index ('ProxyBI') which can be used
+     as an incredibly effective feature for microglia clustering. Works
+     well for PCA + K-means, UMAP, and single-feature clustering.
+  5. Created analysis notebooks for R that generate several useful graphs to
+     quantify the clustering efficacy of the model, as well as visualizing
+     cluster distributions themselves across brain regions and treatment groups.
+
 ## Welcome to MicrogliaMorphology!
 
 MicrogliaMorphology is a user-friendly ImageJ macro that offers a
